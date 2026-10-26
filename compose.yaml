@@ -1,0 +1,32 @@
+services:
+  web:
+    build: .
+    expose:
+      - "8095"
+    networks:
+      - dokploy-network
+    labels:
+      traefik.docker.network: dokploy-network
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8095"
+      ROTATE_SECONDS: "${ROTATE_SECONDS:-15}"
+      REFRESH_SECONDS: "${REFRESH_SECONDS:-180}"
+      MAX_ITEMS: "${MAX_ITEMS:-14}"
+      DATA_DIR: /app/data
+    volumes:
+      - headlines-data:/app/data
+    restart: unless-stopped
+    init: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  headlines-data:
+
+networks:
+  dokploy-network:
+    external: true
