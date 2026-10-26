@@ -18,3 +18,7 @@
 **/*.bak
 **/Thumbs.db
 **/.DS_Store
+**/*.dll
+**/*.so
+**/*.so.*
+**/*.dylib

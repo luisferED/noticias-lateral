@@ -1,5 +1,7 @@
 import queue
 import threading
+import tempfile
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -9,6 +11,13 @@ import ndi_sender as ndi
 
 
 class RenderTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        patcher = patch.object(ndi, "NDI_DATA_DIR", Path(directory.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_panel_has_full_hd_alpha_and_reserved_space(self):
         photo = Image.new("RGBA", (335, 245), "#59c3ec")
         with patch.object(ndi, "load_remote_image", return_value=photo):

@@ -5,6 +5,9 @@ import ctypes
 import io
 import json
 import os
+import logging
+import platform
+import signal
 import time
 import queue
 import threading
@@ -15,7 +18,8 @@ from urllib.request import Request, urlopen
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
-from config import API_URL, BASE_DIR, REFRESH_SECONDS, ROTATE_SECONDS, SOURCE_NAME
+from config import API_URL, BASE_DIR, MAX_ITEMS, REFRESH_SECONDS, ROTATE_SECONDS, SOURCE_NAME, positive_int
+from ndi_status import STATUS_FILE, write_status
 
 WIDTH = 1920
 HEIGHT = 1080
@@ -24,7 +28,11 @@ RAIL_Y = 0
 RAIL_W = 335
 RAIL_H = 825
 TOP_CLEAR = 78
-FPS = 30
+FPS = positive_int("NDI_FPS", 30)
+if FPS > 120:
+    raise ValueError("NDI_FPS no puede superar 120")
+NDI_DATA_DIR = Path(os.environ.get("NDI_DATA_DIR", str(BASE_DIR / "data" / "ndi")))
+logger = logging.getLogger(__name__)
 TRANSITION_SECONDS = 0.85
 LOGO_PATH = BASE_DIR / "assets" / "el-deber-verde.png"
 _dll_directory = None
@@ -65,11 +73,11 @@ class NDIlib_video_frame_v2_t(ctypes.Structure):
         ("frame_rate_D", ctypes.c_int),
         ("picture_aspect_ratio", ctypes.c_float),
         ("frame_format_type", ctypes.c_int),
-        ("timecode", ctypes.c_longlong),
+        ("timecode", ctypes.c_int64),
         ("p_data", ctypes.POINTER(ctypes.c_ubyte)),
         ("line_stride_in_bytes", ctypes.c_int),
         ("p_metadata", ctypes.c_char_p),
-        ("timestamp", ctypes.c_longlong),
+        ("timestamp", ctypes.c_int64),
     ]
 
 
@@ -79,24 +87,36 @@ def fourcc(value: bytes) -> int:
 
 def load_ndi():
     global _dll_directory
-    if os.name != "nt":
-        raise RuntimeError("Esta salida NDI requiere Windows de 64 bits y NDI Runtime")
-    configured = os.environ.get("NDI_DLL_PATH")
-    program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
-    candidates = [Path(configured)] if configured else [
-        program_files / "NDI" / f"NDI {version} Tools" / folder / filename
-        for version in (6, 5)
-        for folder, filename in (
-            ("Runtime", "Processing.NDI.Lib.x64.dll"),
-            ("Test Patterns", "Processing.NDI.Lib.Advanced.x64.dll"),
-        )
-    ]
-    ndi_dll = next((path for path in candidates if path.is_file()), None)
-    if ndi_dll is None:
-        raise RuntimeError("Instala NDI Runtime o configura NDI_DLL_PATH en .env")
-    _dll_directory = os.add_dll_directory(str(ndi_dll.parent))
-    ndi = ctypes.CDLL(str(ndi_dll))
+    if ctypes.sizeof(ctypes.c_void_p) != 8:
+        raise RuntimeError("NDI requiere Python y runtime de 64 bits")
+    configured = os.environ.get("NDI_LIBRARY_PATH")
+    if platform.system() == "Windows":
+        configured = configured or os.environ.get("NDI_DLL_PATH")
+        program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        candidates = [Path(configured)] if configured else [
+            program_files / "NDI" / f"NDI {version} Tools" / folder / filename
+            for version in (6, 5)
+            for folder, filename in (
+                ("Runtime", "Processing.NDI.Lib.x64.dll"),
+                ("Test Patterns", "Processing.NDI.Lib.Advanced.x64.dll"),
+            )
+        ]
+        library = next((path for path in candidates if path.is_file()), None)
+        if library is None:
+            raise RuntimeError("Instala NDI Runtime o configura NDI_LIBRARY_PATH/NDI_DLL_PATH")
+        _dll_directory = os.add_dll_directory(str(library.parent))
+    elif platform.system() == "Linux":
+        library = Path(configured or "/opt/ndi/libndi.so")
+        if not library.is_file():
+            raise RuntimeError(f"No existe el runtime oficial NDI Linux: {library}")
+    else:
+        raise RuntimeError("Plataforma soportada: Windows o Linux de 64 bits")
+    # The SDK exports the C ABI (cdecl on Windows), with natural alignment.
+    ndi = ctypes.CDLL(str(library))
+    ndi.NDIlib_initialize.argtypes = []
     ndi.NDIlib_initialize.restype = ctypes.c_bool
+    ndi.NDIlib_version.argtypes = []
+    ndi.NDIlib_version.restype = ctypes.c_char_p
     ndi.NDIlib_send_create.argtypes = [ctypes.POINTER(NDIlib_send_create_t)]
     ndi.NDIlib_send_create.restype = ctypes.c_void_p
     ndi.NDIlib_send_send_video_v2.argtypes = [
@@ -106,7 +126,11 @@ def load_ndi():
     ndi.NDIlib_send_send_video_v2.restype = None
     ndi.NDIlib_send_destroy.argtypes = [ctypes.c_void_p]
     ndi.NDIlib_send_destroy.restype = None
+    ndi.NDIlib_destroy.argtypes = []
     ndi.NDIlib_destroy.restype = None
+    ndi.NDIlib_send_get_no_connections.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    ndi.NDIlib_send_get_no_connections.restype = ctypes.c_int
+    logger.info("Runtime NDI: %s (%s)", ndi.NDIlib_version(), library)
     return ndi
 
 
@@ -121,13 +145,34 @@ def fetch_items() -> list[dict]:
         payload = fetch_json(API_URL)
         items = payload.get("items", [])
         if items:
-            return items
-    except Exception:
-        pass
+            return validate_items(items)
+        logger.warning("API sin titulares; se conserva la cola anterior")
+    except Exception as error:
+        logger.warning("API no disponible; se conserva la cola anterior: %s", error)
+    return []
 
-    import server
 
-    return server.get_payload(force=True).get("items", [])
+def validate_items(items) -> list[dict]:
+    if not isinstance(items, list):
+        raise ValueError("items debe ser una lista")
+    return [item for item in items if isinstance(item, dict)
+            and isinstance(item.get("title"), str) and item["title"].strip()
+            and all(isinstance(item.get(key, ""), str)
+                    for key in ("url", "image", "section"))][:MAX_ITEMS]
+
+
+def saved_items() -> list[dict]:
+    try:
+        return validate_items(json.loads((NDI_DATA_DIR / "headlines.json").read_text("utf-8")))
+    except (OSError, ValueError):
+        return []
+
+
+def persist_items(items):
+    NDI_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    temporary = NDI_DATA_DIR / "headlines.tmp"
+    temporary.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(NDI_DATA_DIR / "headlines.json")
 
 
 def load_remote_image(url: str, size: tuple[int, int]) -> Image.Image:
@@ -301,7 +346,18 @@ def draw_panel(items: list[dict], index: int) -> Image.Image:
 def to_bgra_buffer(image: Image.Image):
     arr = np.asarray(image.convert("RGBA"), dtype=np.uint8)
     bgra = arr[:, :, [2, 1, 0, 3]].copy()
-    return ctypes.create_string_buffer(bgra.tobytes())
+    return ctypes.create_string_buffer(bgra.tobytes(), bgra.nbytes)
+
+
+def make_video_frame(buffer):
+    return NDIlib_video_frame_v2_t(
+        xres=WIDTH, yres=HEIGHT, FourCC=fourcc(b"BGRA"),
+        frame_rate_N=FPS, frame_rate_D=1, picture_aspect_ratio=WIDTH / HEIGHT,
+        frame_format_type=1,  # NDIlib_frame_format_type_progressive
+        timecode=0x7FFFFFFFFFFFFFFF,  # NDIlib_send_timecode_synthesize
+        p_data=ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)),
+        line_stride_in_bytes=WIDTH * 4, p_metadata=None, timestamp=0,
+    )
 
 
 def ease_transition(value: float) -> float:
@@ -336,24 +392,39 @@ def compose_transition(previous: Image.Image, current: Image.Image, progress: fl
 
 def prepare_news(updates: queue.Queue, stop: threading.Event):
     # Download and render off the video thread so NDI keeps emitting frames.
+    def publish(items):
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            panels = list(executor.map(lambda i: draw_panel(items, i), range(len(items))))
+        try:
+            updates.get_nowait()
+        except queue.Empty:
+            pass
+        updates.put_nowait((items, panels))
+
+    previous = saved_items()
+    if previous:
+        try:
+            publish(previous)
+        except Exception:
+            logger.exception("No se pudo renderizar la cola persistida")
+            previous = []
     while not stop.is_set():
         items = []
         try:
             items = fetch_items()
             if items:
-                with ThreadPoolExecutor(max_workers=4) as executor:
-                    panels = list(executor.map(lambda i: draw_panel(items, i), range(len(items))))
-                try:
-                    updates.get_nowait()
-                except queue.Empty:
-                    pass
-                updates.put_nowait((items, panels))
+                # Avoid replacing valid photos with placeholders on API failure.
+                if items != previous:
+                    publish(items)
+                    previous = items
+                persist_items(items)
         except Exception as error:
-            print(f"No se pudo actualizar NDI: {error}", flush=True)
+            logger.exception("No se pudo actualizar NDI: %s", error)
         stop.wait(REFRESH_SECONDS if items else 15)
 
 
-def run_sender(name: str):
+def run_sender(name: str, stop: threading.Event | None = None):
+    stop = stop if stop is not None else threading.Event()
     ndi = load_ndi()
     if not ndi.NDIlib_initialize():
         raise RuntimeError("No se pudo inicializar NDI")
@@ -366,14 +437,15 @@ def run_sender(name: str):
     )
     sender = ndi.NDIlib_send_create(ctypes.byref(settings))
     if not sender:
+        ndi.NDIlib_destroy()
         raise RuntimeError("No se pudo crear la salida NDI")
 
     print(f"NDI activo: {name}")
-    print("Formato: 1920x1080 BGRA con alpha")
+    print(f"Formato: 1920x1080 BGRA con alpha, {FPS} FPS; API: {API_URL}")
+    print("NDI® is a registered trademark of Vizrt NDI AB — https://ndi.video/")
     print("Ctrl+C para detener")
 
     updates = queue.Queue(maxsize=1)
-    stop = threading.Event()
     threading.Thread(target=prepare_news, args=(updates, stop), daemon=True).start()
     items: list[dict] = []
     panels = [draw_panel([], 0)]
@@ -385,9 +457,11 @@ def run_sender(name: str):
     static_frame = True
     pending = None
     frame_interval = 1 / FPS
+    frames = 0
+    last_status = last_log = time.monotonic()
 
     try:
-        while True:
+        while not stop.is_set():
             now = time.monotonic()
             try:
                 pending = updates.get_nowait()
@@ -421,22 +495,20 @@ def run_sender(name: str):
                 buffer = to_bgra_buffer(image)
                 static_frame = True
 
-            frame = NDIlib_video_frame_v2_t(
-                xres=WIDTH,
-                yres=HEIGHT,
-                FourCC=fourcc(b"BGRA"),
-                frame_rate_N=FPS,
-                frame_rate_D=1,
-                picture_aspect_ratio=WIDTH / HEIGHT,
-                frame_format_type=1,
-                timecode=-1,
-                p_data=ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)),
-                line_stride_in_bytes=WIDTH * 4,
-                p_metadata=None,
-                timestamp=0,
-            )
+            frame = make_video_frame(buffer)
             ndi.NDIlib_send_send_video_v2(sender, ctypes.byref(frame))
-            time.sleep(frame_interval)
+            frames += 1
+            sent_at = time.monotonic()
+            if sent_at - last_status >= 1:
+                # Only a returned send call advances the heartbeat.
+                write_status(STATUS_FILE, frames=frames, items=len(items), name=name,
+                             fps=FPS, connections=ndi.NDIlib_send_get_no_connections(sender, 0))
+                last_status = sent_at
+            if sent_at - last_log >= 30:
+                logger.info("NDI frames=%s items=%s FPS objetivo=%s", frames, len(items), FPS)
+                last_log = sent_at
+            # clock_video already throttles SDK submission; never add another full interval.
+            stop.wait(max(0, frame_interval - (time.monotonic() - now)))
     finally:
         stop.set()
         ndi.NDIlib_send_destroy(sender)
@@ -451,16 +523,30 @@ def save_preview(path: Path):
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument("--name", default=SOURCE_NAME)
     parser.add_argument("--preview", action="store_true")
+    parser.add_argument("--check-runtime", action="store_true",
+                        help="Carga e inicializa el SDK sin crear una fuente ni emitir")
     args = parser.parse_args()
+
+    if args.check_runtime:
+        ndi = load_ndi()
+        if not ndi.NDIlib_initialize():
+            raise RuntimeError("El runtime no se pudo inicializar en esta CPU/plataforma")
+        ndi.NDIlib_destroy()
+        print("OK: runtime cargado e inicializado; no se ha emitido video")
+        return
 
     if args.preview:
         save_preview(BASE_DIR / "preview_ndi.png")
         return
 
-    run_sender(args.name)
+    stop = threading.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda *_: stop.set())
+    run_sender(args.name, stop)
 
 
 if __name__ == "__main__":

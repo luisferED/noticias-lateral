@@ -37,3 +37,10 @@ htmlcov/
 .coverage*
 Thumbs.db
 .DS_Store
+*.dll
+*.so
+*.so.*
+*.dylib
+ndi-sdk/
+ndi-runtime/
+ndi-config/

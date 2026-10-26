@@ -6,6 +6,8 @@ $destination = Join-Path $outputDir ('el-deber-deploy-' + (Get-Date -Format 'yyy
 $entries = @(
     'server.py', 'config.py', 'ndi_sender.py', 'index.html', 'assets',
     'requirements.txt', 'requirements-ndi.txt', '.env.example',
+    'ndi_status.py', 'ndi_service.py', 'Dockerfile.ndi', 'Dockerfile.ndi.dockerignore',
+    'DESPLIEGUE_NDI_LINUX.md',
     '.dockerignore', '.gitignore', 'Dockerfile', 'compose.yaml',
     'instalar.bat', 'iniciar.bat', 'iniciar_ndi.bat', 'README.md', 'README.txt',
     'tools', 'tests'
