@@ -24,7 +24,8 @@ async function main() {
     console,
     document: { getElementById: element, querySelector: element,
       fonts: { ready: Promise.resolve() } },
-    window: { setTimeout(fn) { fn(); }, setInterval(fn, ms) { timers.set(ms, fn); } },
+    window: { innerWidth: 1920, innerHeight: 1080, addEventListener() {},
+      setTimeout(fn) { fn(); }, setInterval(fn, ms) { timers.set(ms, fn); } },
     fetch: async (url) => ({ ok: true, json: async () => url === '/api/config'
       ? { rotate_seconds: 15, refresh_seconds: 180 } : { items } }),
   });

@@ -1,6 +1,17 @@
 ﻿# NOTICIAS LATERAL – EL DEBER
 
 Web/API en Ubuntu con Dokploy; transmisor NDI independiente en Windows.
+El lienzo mantiene sus coordenadas originales de 1920×1080 y se escala completo
+desde la esquina superior izquierda usando el menor factor entre ancho/1920 y
+alto/1080. El factor se actualiza al redimensionar la ventana; el espacio sobrante
+permanece transparente. En 1920×1080 la escala es 1, sin cambios para televisión.
+El transmisor NDI de Windows conserva su render original independiente.
+
+Validación responsiva: `node tests/test_responsive.cjs` usa Chrome headless
+(o la ruta `CHROME_PATH`) y comprueba geometría real, transparencia y el manejador
+de resize en 1366×768, 1600×900, 1920×1080, vertical 768×1366 y 2560×1440.
+La prueba usa datos simulados sin consultar la API y no modifica el servidor.
+
 Overlay transparente 1920×1080 con Flama Condensed. Se conservan imágenes,
 fuentes, animaciones y lógica originales: rotación 15 s, consulta 180 s,
 máximo 14 titulares con foto. La cola nueva se aplica en el siguiente cambio,

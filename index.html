@@ -55,6 +55,8 @@
       width: var(--stage-width);
       height: var(--stage-height);
       background: transparent;
+      transform-origin: top left;
+      transform: scale(var(--stage-scale, 1));
     }
 
     .news-rail {
@@ -189,6 +191,15 @@
   </main>
 
   <script>
+    // Scale only the outer canvas; all broadcast coordinates remain 1920x1080.
+    const canvas = document.querySelector(".canvas");
+    function resizeCanvas() {
+      const scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+      canvas.style.setProperty("--stage-scale", scale);
+    }
+    resizeCanvas();
+    window.addEventListener("resize", resizeCanvas);
+
     const API_URL = "/api/headlines";
     let ROTATE_MS = 15000;
     let REFRESH_MS = 180000;
