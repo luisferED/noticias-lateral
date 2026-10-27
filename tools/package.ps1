@@ -2,15 +2,13 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $outputDir = Join-Path $projectRoot 'dist'
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
-$destination = Join-Path $outputDir ('el-deber-deploy-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '.zip')
+$destination = Join-Path $outputDir ('el-deber-web-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '.zip')
 $entries = @(
-    'server.py', 'config.py', 'ndi_sender.py', 'index.html', 'assets',
-    'requirements.txt', 'requirements-ndi.txt', '.env.example',
-    'ndi_status.py', 'ndi_service.py', 'Dockerfile.ndi', 'Dockerfile.ndi.dockerignore',
-    'DESPLIEGUE_NDI_LINUX.md',
+    'server.py', 'config.py', 'index.html', 'assets',
+    'requirements.txt', '.env.example',
     '.dockerignore', '.gitignore', 'Dockerfile', 'compose.yaml',
-    'instalar.bat', 'iniciar.bat', 'iniciar_ndi.bat', 'README.md', 'README.txt',
-    'tools', 'tests'
+    'instalar.bat', 'iniciar.bat', 'README.md', 'README.txt',
+    'tools/package.ps1', 'tests/test_service.py', 'tests/test_rotation.cjs'
 )
 $sources = $entries | ForEach-Object { Join-Path $projectRoot $_ }
 Add-Type -AssemblyName System.IO.Compression.FileSystem

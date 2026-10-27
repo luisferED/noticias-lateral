@@ -1,115 +1,247 @@
-﻿# NOTICIAS LATERAL – EL DEBER
+﻿# EL DEBER WEB: migración de NOTICIAS LATERAL a Browser Input
 
-Web/API y emisor NDI® preparados para dos servicios en un único Ubuntu administrado
-por Dokploy. Windows sigue soportado para desarrollo local y recepción de prueba.
-NDI® is a registered trademark of Vizrt NDI AB. [Información NDI](https://ndi.video/).
+Overlay transparente de 1920×1080 para vMix. El panel ocupa x=1422..1919,
+y=0..1079; la fotografía empieza en y=112. Incluye Flama Condensed,
+rotación (15 s), refresco (180 s), hasta 14 noticias y QR local por artículo.
+El escalado conserva la composición completa en ventanas menores.
 
-La web ya funciona en `noticias.grupoeldeber-corp.com`. La nueva preparación Linux
-no se ha desplegado. La guía completa, variables, licencia y pasos manuales están
-en [DESPLIEGUE_NDI_LINUX.md](DESPLIEGUE_NDI_LINUX.md).
+## Configuración preparada
 
-## Composición y noticias
+`compose.yaml` contiene únicamente `web`, conectado a la red externa
+`dokploy-network`, con puerto interno 8095 (`expose`, sin `ports`). No publica
+8095 en Ubuntu. Traefik debe acceder a `web:8095` mediante Domains de Dokploy.
+No se fijan container_name ni etiquetas Traefik manuales. No hay SDK, servicio,
+montajes ni host networking de NDI. El Dockerfile usa Python 3.12, Waitress,
+usuario app UID 10001 y healthcheck HTTP independiente de la fuente externa.
+Compose elimina capabilities y activa no-new-privileges.
 
-Overlay transparente de 1920×1080, fotografía, categoría y fuentes Flama Condensed
-originales. Las coordenadas internas se conservan. El lienzo web escala completo
-según `min(ancho/1920, alto/1080)` desde la esquina superior izquierda y se ajusta
-al redimensionar; en Full HD conserva escala 1. El render NDI es independiente.
+La clave lógica del volumen sigue siendo `headlines-data`. Se exige
+`HEADLINES_VOLUME_NAME` con el nombre físico exacto y `external: true`: un nombre
+incorrecto hace fallar el arranque en vez de crear silenciosamente otro volumen.
+Mantener además el mismo nombre de proyecto Compose y el mismo recurso Dokploy.
+No añadir `name:` ni cambiar COMPOSE_PROJECT_NAME a un valor inventado.
 
-- Rotación cada 15 segundos, actualización cada 180 segundos, hasta 14 noticias.
-- La cola nueva se aplica en el próximo cambio sin reiniciar la vuelta.
-- La web conserva su última cola en `/app/data/headlines.json`.
-- NDI conserva los paneles en memoria si falla la API y guarda sus titulares en
-  un volumen propio. Tras reiniciar necesita descargar las fotos de nuevo.
-- Web y NDI no se sincronizan por fotograma. La cantidad real de titulares puede
-  ser inferior a 14 si la portada no aporta suficientes noticias con foto.
+## 1. Inventario y respaldo antes del cambio (Ubuntu)
 
-## Dokploy / Ubuntu
+Estos pasos los ejecuta el operador. No se ha accedido al servidor 172.20.16.195.
+No detener la versión anterior todavía. En Dokploy guardar el Compose actual,
+variables, nombre del proyecto, repositorio/rama, revisión Git y Domains (incluido
+HTTPS, certificado, ruta y puerto). Guardar una etiqueta Git del commit anterior.
 
-Repositorio `luisferED/noticias-lateral`, rama `main`, archivo `compose.yaml`.
-Actualizar el proyecto Dokploy existente, conservando su identidad y volumen web.
-No usar Fresh Volumes. No cambiar el dominio ni la configuración Domains de web.
+Identificar el contenedor web correcto, sin asumir su nombre:
 
-| Servicio | Red | Función |
-| --- | --- | --- |
-| web | dokploy-network | Web/API en 8095, ruta Traefik existente |
-| ndi | host | ED_DEBER_TITULARES_ALPHA, 1920×1080 BGRA con alpha, 30 FPS |
+```sh
+docker ps --filter label=com.docker.compose.service=web
+# Sustituir WEB_ACTUAL por el ID verificado del web anterior:
+docker inspect WEB_ACTUAL --format '{{ index .Config.Labels "com.docker.compose.project" }}'
+docker inspect WEB_ACTUAL --format '{{range .Mounts}}{{println .Type .Name .Destination}}{{end}}'
+docker inspect WEB_ACTUAL --format '{{json .Config.Labels}}'
+docker network inspect dokploy-network
+```
 
-NDI consulta `http://127.0.0.1:18095/api/headlines`: el Compose liga ese puerto web
-solo a loopback. El puerto interno 8095 no se publica en las interfaces Ubuntu.
-Si se cambia NDI_WEB_LOOPBACK_PORT, ajustar también HEADLINES_API_URL.
-Los dos servicios usan usuario 10001:10001, reinicio automático y logs separados.
-El supervisor NDI recupera bloqueos de envío; el healthcheck solo no reiniciaría
-un contenedor unhealthy.
+Registrar PROYECTO_ACTUAL y el volumen montado en /app/data (confirmar también
+el destino real en el Compose anterior). Si la ruta difiere, revisar el contenido
+antes de migrar. Ejecutar `docker volume inspect VOLUMEN_REAL`.
+Conservar copias de los resultados fuera del repositorio; pueden incluir datos
+privados. Respaldar la cola sin escribir ni cambiar permisos en el volumen:
 
-Dockerfile.ndi instala Python, NumPy, Pillow y clientes Avahi dentro de la imagen.
-No descarga ni incluye el SDK/runtime propietario. Debe montarse libndi.so oficial
-para la arquitectura real, con licencia aceptada, en una carpeta privada de Ubuntu.
-También requiere el Avahi/D-Bus existente del host y acceso a la red de emisión.
-No se instala ni se modifica nada en el servidor automáticamente.
+```sh
+mkdir -p respaldo-el-deber
+# Lectura de la cola actual; repetir inmediatamente antes del despliegue.
+docker cp WEB_ACTUAL:/app/data/. ./respaldo-el-deber/
+```
 
-**Antes de Deploy:** seguir la guía Linux para inspección de puertos, runtime,
-ABI contra headers oficiales, permisos, aislamiento de Internet y pruebas reales.
-La configuración y las pruebas simuladas no sustituyen la recepción en vMix/NDI
-Studio Monitor. No hacer push o despliegue sin la revisión correspondiente.
+Para respaldo completo del volumen, usar el procedimiento de backups existente
+del servidor. No usar `down -v`, `volume rm`, `volume prune`, ni borrar datos.
+Comprobar permisos de lectura/escritura del directorio y archivos para UID 10001.
+Si no son compatibles, resolver con el administrador y respaldo previo; no se
+incluye un chown automático que altere permisos de la aplicación anterior.
+Una caché antigua sin fotos/formato compatible se ignora y se obtiene una nueva;
+la aplicación escribirá headlines.json al refrescar, por eso se requiere respaldo.
 
-## Windows para desarrollo local
+## 2. Archivos exactos para luisferED/noticias-lateral
 
-1. Instalar Python 3.12 o superior x64 y ejecutar `instalar.bat`.
-2. Revisar `.env`: ajustar HEADLINES_API_URL a la API local/remota que se utilizará.
-   `.env.example` está orientado al Compose Linux y usa el puerto loopback 18095.
-3. Para web local, ejecutar `iniciar.bat` y abrir `http://127.0.0.1:8095/`.
-4. Instalar el runtime NDI Windows x64 por separado. Para emisor local configurar:
+Este directorio no es un checkout Git. Clonar el repositorio anterior en otra
+carpeta y crear una rama de migración. Copiar a su raíz, sobrescribiendo:
+
+- `compose.yaml`, `Dockerfile`, `requirements.txt`, `server.py`, `config.py`, `index.html`.
+- `.dockerignore`, `.gitignore`, `.env.example`, `README.md`, `README.txt`.
+- `assets/el-deber-verde.png` y `assets/fonts/FlamaCondensed-{Medium,Bold,Black}.ttf`
+  (son tres archivos de fuentes).
+- `tests/test_service.py`, `tests/test_rotation.cjs`.
+- `tools/package.ps1`, `instalar.bat`, `iniciar.bat`.
+
+No subir el ZIP original, `.env`, data/, backups, logs ni .venv. Revisar con
+`git status --short`, `git diff --check`, `git diff` y `git ls-files`.
+.gitignore no deja de rastrear secretos ya versionados: retirarlos del índice
+con revisión previa y rotarlos si estuvieron expuestos. Retirar del índice los
+fuentes/Dockerfiles/SDK de NDI que existan en el repositorio antiguo, después de
+identificarlos; no se conocen aquí sus nombres exactos. El commit/etiqueta anterior
+los conserva para rollback. No eliminar archivos de datos del servidor.
+Hacer commit, revisión y push manualmente cuando esté aprobado. Este trabajo no
+hace push ni despliegue.
+
+## 3. Actualizar el recurso Dokploy existente
+
+Usar el recurso Compose actual y `luisferED/noticias-lateral`; conservar su nombre
+de proyecto, rama acordada y ruta `compose.yaml`. No crear otro recurso/proyecto.
+Configurar variables en Dokploy:
 
 ```dotenv
-HEADLINES_API_URL=http://127.0.0.1:8095/api/headlines
-NDI_SOURCE_NAME=ED_DEBER_TITULARES_ALPHA
-NDI_FPS=30
+HEADLINES_VOLUME_NAME=VOLUMEN_REAL_VERIFICADO
 ROTATE_SECONDS=15
 REFRESH_SECONDS=180
 MAX_ITEMS=14
 ```
 
-Quitar NDI_LIBRARY_PATH=/opt/ndi/libndi.so si se copió desde el ejemplo Linux.
-NDI_LIBRARY_PATH puede apuntar a la DLL local; se conserva NDI_DLL_PATH como
-alternativa compatible y detección automática de NDI Tools 5/6.
-Ejecutar `iniciar_ndi.bat`; detener con Ctrl+C. No mantener simultáneamente un
-emisor Windows y otro Ubuntu con el mismo nombre durante las pruebas.
+En Domains conservar `noticias.grupoeldeber-corp.com`, servicio `web`, puerto
+contenedor `8095`, ruta `/`, HTTPS y certificado actuales. Confirmar que Dokploy
+genera las etiquetas y conecta Traefik a dokploy-network. No añadir routers
+manuales ni otro dominio idéntico en un segundo servicio. Revisar etiquetas y
+routers existentes: no debe quedar otro web sirviendo el mismo Host tras el cambio.
+El archivo fuente no basta para certificar las reglas dinámicas del servidor.
 
-Con API remota, usar `https://noticias.grupoeldeber-corp.com/api/headlines` y
-confiar en el certificado corporativo. Si la API falla, el emisor conserva su
-última cola; ya no inicia un scraper local alternativo. Sigue necesitando acceso
-al CDN para descargar fotos. Las variables del entorno tienen prioridad sobre .env.
+Validar en el contexto del proyecto actual antes del despliegue:
 
-## Pruebas y diagnóstico local
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-ndi.txt
-.\.venv\Scripts\python.exe -m pip check
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-node tests/test_rotation.cjs
-node tests/test_responsive.cjs
-docker compose --env-file .env.example config --quiet
+```sh
+export HEADLINES_VOLUME_NAME=VOLUMEN_REAL_VERIFICADO
+docker compose -p PROYECTO_ACTUAL config --quiet
+docker compose -p PROYECTO_ACTUAL build web
 ```
 
-La prueba responsiva usa Chrome headless (o CHROME_PATH) y comprueba geometría y
-transparencia en 1366×768, 1600×900, 1920×1080, 768×1366 y 2560×1440.
-Las pruebas Python no necesitan SDK ni Internet; los envíos nativos son simulados.
-Ver pruebas Linux pendientes y cómo validar headers/runtime en la guía dedicada.
-`python ndi_sender.py --check-runtime` carga/inicializa el runtime sin crear fuente.
-`python ndi_sender.py --preview` genera una imagen local con alpha desde la API.
+No ejecutar `up` desde una carpeta paralela. Desplegar manualmente desde el recurso
+Dokploy en una ventana acordada; puede haber una breve interrupción al reemplazar
+web. Verificar el comando de despliegue de Dokploy: si usa `--remove-orphans`,
+eliminará NDI al desaparecer del Compose. Para conservar NDI hasta validar web,
+hacer primero una revisión de transición: reemplazar solo la definición web por
+la nueva, añadir la red/volumen externo, y conservar **sin cambios** la definición
+ndi antigua en esa revisión temporal. No debe incorporarse al Compose final de
+este paquete. Revisar que ndi no tenga dependencia de un endpoint NDI retirado.
+El Compose antiguo no está disponible aquí para generar esa revisión exacta.
 
-- `/healthz`: estado del proceso web; 200 no garantiza noticias ni persistencia.
-- `/api/config`: valores efectivos 15/180/14 y resolución 1920×1080.
-- `/api/headlines`: 200 con cola; 503 sin fuente ni copia. Con copia antigua y
-  fuente fallida devuelve 200 con `stale: true` y `ok: false`.
-- `python ndi_status.py`: estado de frames completados; no valida recepción remota.
+## 4. Verificación posterior y Browser Input
 
-La web solo necesita requirements.txt; requisitos NDI separados en
-requirements-ndi.txt. La extracción depende del HTML público de El Deber.
-Los archivos de configuración privados, SDK, runtime, datos, ZIP y entornos
-virtuales se excluyen de Git y de los contextos Docker. Gitignore no retira
-archivos privados ya rastreados: revisar el diff antes de subir.
+```sh
+curl -fsS https://noticias.grupoeldeber-corp.com/healthz
+curl -fsS https://noticias.grupoeldeber-corp.com/api/config
+curl -fsS https://noticias.grupoeldeber-corp.com/api/headlines
+docker ps --filter label=com.docker.compose.service=web
+# Con el ID nuevo verificado:
+docker inspect WEB_NUEVO --format '{{json .State.Health}}'
+docker inspect WEB_NUEVO --format '{{json .NetworkSettings.Ports}}'
+docker logs --tail=100 WEB_NUEVO
+```
 
-`tools/package.ps1` genera un paquete de fuentes en dist/, incluida la guía Linux,
-con configuración de ejemplo y sin SDK/runtime ni .env privados.
+Esperar healthy, confirmar red, volumen exacto y ausencia de HostPort 8095.
+Comprobar en Ubuntu que no queda otro proceso publicando 8095. /healthz confirma
+el proceso, no la disponibilidad de noticias: revisar también source_ok, items,
+updated_at y la API. La fuente requiere salida HTTPS hacia eldeber.com.bo y fotos
+hacia su CDN; el navegador/vMix también necesita acceso a las fotos.
+
+Abrir `https://noticias.grupoeldeber-corp.com/` en navegador, revisar consola y red:
+API, fuentes, fotos y QR deben responder sin 404/502 ni contenido mixto. Observar
+una vuelta de 210 s y un refresco de 180 s sin reiniciar la cola. Probar ventana
+1920×1080 y 960×540; el panel debe escalar entero, sin barras ni recortes.
+
+En vMix: Add Input → Web Browser, misma URL HTTPS, Width 1920, Height 1080.
+Activar transparencia donde la versión lo requiera; posición 0,0 y escala 1:1.
+Superponer sobre una imagen de color: los 1422 píxeles izquierdos deben dejarla
+visible y el panel derecho debe permanecer opaco. No usar captura de pantalla.
+Verificar fuentes, animación, fotos, rotación y continuidad durante al menos 4 min.
+Si el motor del navegador de vMix es antiguo, validar esta composición en esa
+versión antes de retirar NDI. No se ha ejecutado vMix en este equipo.
+
+Para cada noticia, comparar `items[].url`, enlace del QR y parámetro url de
+`/api/qr.svg?url=...` (codificado). Escanear con teléfono usando datos móviles:
+debe abrir la nota pública HTTPS de El Deber, nunca 172.20.16.195, localhost ni
+el dominio del overlay. Probar varias notas, títulos largos y una rotación.
+El endpoint solo acepta artículos HTTPS de eldeber.com.bo o www.eldeber.com.bo;
+la URL exacta se codifica localmente sin servicios de QR externos. La existencia
+actual de cada artículo y sus redirecciones se verifican con esa prueba real.
+
+## 5. Retirar NDI únicamente después de aprobar web
+
+Si se conservó con la revisión temporal, publicar manualmente el Compose final
+solo web y actualizar el mismo recurso. Identificar su contenedor exacto:
+
+```sh
+docker ps -a --filter label=com.docker.compose.project=PROYECTO_ACTUAL --filter label=com.docker.compose.service=ndi
+# Revisar labels, imagen y montajes antes de actuar:
+docker inspect NDI_VERIFICADO
+# Solo después de verificar navegador y vMix:
+docker stop NDI_VERIFICADO
+docker rm NDI_VERIFICADO
+```
+
+No usar `-v`. Si Dokploy ya retiró el huérfano, no repetir. Quitar de Dokploy solo
+variables/montajes exclusivos NDI tras registrar sus valores para rollback.
+No borrar volúmenes, datos, imagen anterior ni backups. Comprobar de nuevo dominio,
+API y vMix. El puerto host 8095 deja de ser la vía de acceso; usar el dominio.
+
+## 6. Rollback
+
+Ante fallo: conservar logs, volver a la revisión Git/Compose anterior en el mismo
+recurso Dokploy, restaurar sus variables y configuración Domains guardadas y
+hacer deploy manual. Usar el mismo proyecto y volumen. Si el formato de caché
+nuevo no sirve al web antiguo, restaurar la copia de headlines.json con web
+detenido durante una ventana controlada, sin borrar el volumen. Restaurar NDI
+mediante el Compose anterior si se retiró; comprobar requisitos SDK/montajes de
+ese despliegue. Confirmar dominio, API anterior y recepción NDI. No ejecutar un
+segundo stack con el mismo Host de Traefik. El rollback requiere conservar la
+revisión, imagen y configuración anteriores, no solo este README.
+
+## Desarrollo y pruebas
+
+Windows: ejecutar instalar.bat y luego iniciar.bat; abrir http://127.0.0.1:8095/.
+Sin Docker: instalar requirements.txt en un entorno Python 3.12+ y ejecutar
+`python server.py`. PORT/HOST/DATA_DIR son opciones locales; Compose fija
+0.0.0.0:8095 y /app/data. No abrir 8095 en el firewall para Dokploy.
+
+```sh
+python -m unittest discover -s tests -p test_service.py -v
+node tests/test_rotation.cjs
+```
+
+Endpoints conservados: `/`, `/index.html`, `/assets/...`, `/healthz`, `/api/config`,
+`/api/headlines`, `/api/qr.svg`. Sin fuente y sin caché válida, headlines responde
+503; con caché y fallo externo devuelve 200 con stale=true y ok=false. La escritura
+de caché es atómica. El healthcheck no consulta internet.
+
+Para verificar realmente la imagen en Ubuntu antes del cambio, construir con
+Compose y ejecutar un contenedor de prueba sin labels Traefik, sin publicar
+puertos y sin montar el volumen productivo. Comprobar UID y healthcheck:
+
+```sh
+docker build -t el-deber-web:preflight .
+docker run -d --name el-deber-preflight el-deber-web:preflight
+docker exec el-deber-preflight id
+docker exec el-deber-preflight python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8095/healthz').read().decode())"
+# Esperar hasta el primer healthcheck (30 s) y revisar:
+docker inspect el-deber-preflight --format '{{json .State.Health}}'
+docker rm -f el-deber-preflight
+```
+
+El preflight es aislado y no sustituye la validación del volumen, Domains o vMix.
+`tools/package.ps1` genera el ZIP de entrega en dist/ sin datos privados.
+
+## Resultado de revisión local — 27 de octubre de 2026
+
+Se revisaron todos los fuentes, scripts, pruebas, configuración y reglas de
+exclusión del paquete (los binarios de fuentes/imagen se conservan).
+Cambios: red Dokploy, sin publicación de puerto, volumen externo obligatorio,
+capabilities eliminadas, eliminación de variables NDI sin uso, validación de
+caché antigua y validación compartida de URL para extracción y QR. Se conserva
+el diseño HTML/CSS y el Dockerfile con usuario sin privilegios.
+
+- 12 pruebas Python: aprobadas (API, privacidad, QR, caché, concurrencia y parser).
+- Prueba Node: aprobada; 14 noticias, 15 s/180 s, refresco sin reinicio de cola.
+- Proceso Waitress real local: /healthz, /, /api/config y /api/qr.svg HTTP 200.
+- Compose v5.1.4: config válido con nombre de volumen de prueba; sin esa variable
+  falla como se espera. No se creó ningún volumen ni contenedor.
+- Empaquetador PowerShell: ejecutado correctamente; ZIP en dist/.
+- Docker Engine local no disponible: construcción de imagen y estado healthy del
+  contenedor pendientes. No se certifican todavía Python 3.12 dentro de Docker,
+  permisos del volumen existente, Traefik real, navegación visual, escaneo móvil
+  ni Browser Input de vMix. Las pruebas Python locales usaron Python 3.14.
+- No se accedió al Ubuntu ni se comprobó el Compose antiguo. No se hizo push,
+  deploy, parada de servicios productivos ni modificación de datos anteriores.

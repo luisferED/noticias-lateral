@@ -26,10 +26,10 @@
     :root {
       --stage-width: 1920px;
       --stage-height: 1080px;
-      --rail-width: 335px;
-      --rail-height: 825px;
-      --rail-right: 29px;
-      --top-clear: 78px;
+      --rail-width: 498px;
+      --rail-height: 1080px;
+      --broadcast-safe-height: 108px;
+      --photo-height: 324px;
       --ed-green: #008f58;
       --ed-green-dark: #006b47;
       --panel: #f3f6f4;
@@ -55,27 +55,33 @@
       width: var(--stage-width);
       height: var(--stage-height);
       background: transparent;
-      transform-origin: top left;
       transform: scale(var(--stage-scale, 1));
+      transform-origin: top left;
     }
 
     .news-rail {
       position: absolute;
-      top: var(--top-clear);
-      right: var(--rail-right);
+      top: 0;
+      right: 0;
       width: var(--rail-width);
-      height: calc(var(--rail-height) - var(--top-clear));
+      height: var(--rail-height);
+      display: grid;
+      grid-template-rows: var(--broadcast-safe-height) minmax(0, 1fr);
       overflow: hidden;
       background: var(--panel);
-      border: 5px solid var(--ed-green);
-      box-shadow: -12px 8px 30px rgba(0, 0, 0, 0.24);
+      border: 4px solid var(--ed-green);
+    }
+
+    .broadcast-safe-area {
+      background: var(--white);
     }
 
     .active-story {
       position: relative;
       width: 100%;
       height: 100%;
-      display: block;
+      display: grid;
+      grid-template-rows: var(--photo-height) minmax(0, 1fr) 232px;
       background: var(--panel);
       transition: opacity 520ms ease, transform 520ms cubic-bezier(.22, .61, .36, 1);
     }
@@ -87,7 +93,7 @@
 
     .photo-wrap {
       position: relative;
-      height: 245px;
+      height: var(--photo-height);
       overflow: hidden;
       background: var(--muted);
       border-bottom: 5px solid var(--ed-green);
@@ -128,44 +134,93 @@
 
     .story-body {
       min-height: 0;
-      height: 360px;
-      padding: 25px 20px 16px;
+      padding: 28px 30px 24px;
       overflow: hidden;
     }
 
     .headline {
       margin: 0;
-      padding-left: 15px;
+      padding-left: 20px;
       overflow: visible;
-      border-left: 7px solid var(--ed-green);
+      border-left: 8px solid var(--ed-green);
       color: var(--ink);
-      font-size: 49px;
-      line-height: 0.98;
+      font-size: 68px;
+      line-height: 1.02;
       font-weight: 900;
       text-transform: uppercase;
       letter-spacing: 0;
+      overflow-wrap: anywhere;
     }
 
     .category-row {
-      position: absolute;
-      right: 22px;
-      bottom: 25px;
-      left: 42px;
-      padding: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 192px;
+      align-items: end;
+      gap: 18px;
+      padding: 0 24px 28px 58px;
+      min-width: 0;
     }
+
+    .story-qr {
+      display: block;
+      width: 192px;
+      height: 192px;
+      align-self: end;
+      background: var(--white);
+    }
+
+    .story-qr[hidden] { display: none; }
+
+    .story-qr img {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .qr-caption {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto;
+      gap: 16px;
+      height: 192px;
+      min-width: 0;
+    }
+
+    .qr-callout {
+      display: flex;
+      align-items: center;
+      align-self: center;
+      gap: 10px;
+      margin: 0;
+      color: var(--ed-green-dark);
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.12;
+    }
+
+    .qr-arrow {
+      flex: 0 0 26px;
+      color: var(--ed-green);
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 32px;
+      font-weight: 400;
+      opacity: 0.75;
+    }
+
+    .category-row:has(.story-qr[hidden]) .qr-callout { visibility: hidden; }
 
     .section {
       display: inline-block;
       max-width: 100%;
-      min-width: 174px;
-      padding: 13px 22px 12px;
+      width: 100%;
+      min-width: 0;
+      padding: 18px 24px;
       overflow: hidden;
       border-radius: 4px;
       background: var(--ed-green);
       box-shadow: inset 0 -3px 0 var(--ed-green-dark);
       color: var(--white);
-      font-size: 25px;
-      line-height: 1;
+      font-size: 32px;
+      line-height: 1.1;
       font-weight: 900;
       text-overflow: ellipsis;
       text-transform: uppercase;
@@ -176,6 +231,7 @@
 <body>
   <main class="canvas">
     <aside class="news-rail">
+      <div class="broadcast-safe-area" aria-hidden="true"></div>
       <article id="activeStory" class="active-story">
         <div class="photo-wrap">
           <img id="storyImage" alt="">
@@ -184,22 +240,23 @@
           <h1 id="storyTitle" class="headline">Cargando titular de El Deber</h1>
         </div>
         <div class="category-row">
-          <span id="storySection" class="section">PORTADA</span>
+          <div class="qr-caption">
+            <p class="qr-callout">
+              <span>Lee la nota completa</span>
+              <span class="qr-arrow" aria-hidden="true">&rarr;</span>
+            </p>
+            <span id="storySection" class="section">PORTADA</span>
+          </div>
+          <a id="storyLink" class="story-qr" target="_blank" rel="noopener noreferrer"
+             aria-label="Abrir noticia completa en El Deber" hidden>
+            <img id="storyQr" alt="Codigo QR de la noticia" width="192" height="192">
+          </a>
         </div>
       </article>
     </aside>
   </main>
 
   <script>
-    // Scale only the outer canvas; all broadcast coordinates remain 1920x1080.
-    const canvas = document.querySelector(".canvas");
-    function resizeCanvas() {
-      const scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
-      canvas.style.setProperty("--stage-scale", scale);
-    }
-    resizeCanvas();
-    window.addEventListener("resize", resizeCanvas);
-
     const API_URL = "/api/headlines";
     let ROTATE_MS = 15000;
     let REFRESH_MS = 180000;
@@ -210,6 +267,26 @@
     const photoWrap = document.querySelector(".photo-wrap");
     const storySection = document.getElementById("storySection");
     const storyTitle = document.getElementById("storyTitle");
+    const storyBody = document.querySelector(".story-body");
+    const storyLink = document.getElementById("storyLink");
+    const storyQr = document.getElementById("storyQr");
+    storyQr.onload = () => { storyQr.style.visibility = "visible"; };
+    storyQr.onerror = () => { storyQr.style.visibility = "hidden"; };
+
+    function fitHeadline() {
+      const style = getComputedStyle(storyBody);
+      const available = storyBody.clientHeight -
+        parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+      fitText(storyTitle, 68, 32, available);
+    }
+
+    function resizeStage() {
+      const scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+      document.documentElement.style.setProperty("--stage-scale", String(scale));
+    }
+
+    resizeStage();
+    window.addEventListener("resize", resizeStage);
 
     function safeText(value) {
       return String(value || "").trim();
@@ -232,6 +309,9 @@
         storyTitle.textContent = "Sin conexion con El Deber";
         storyImage.removeAttribute("src");
         storySection.textContent = "PORTADA";
+        storyLink.hidden = true;
+        storyLink.removeAttribute("href");
+        storyQr.removeAttribute("src");
         return;
       }
 
@@ -244,9 +324,18 @@
         photoWrap.style.setProperty("--story-image", `url("${safeImageUrl}")`);
         storyTitle.textContent = safeText(item.title);
         storySection.textContent = safeText(item.section) || "PORTADA";
-        fitText(storyTitle, 49, 30, 340);
+        storyLink.hidden = !item.url;
+        storyQr.style.visibility = "hidden";
+        if (item.url) {
+          storyLink.href = item.url;
+          storyQr.src = `/api/qr.svg?url=${encodeURIComponent(item.url)}`;
+        } else {
+          storyLink.removeAttribute("href");
+          storyQr.removeAttribute("src");
+        }
+        fitHeadline();
         activeStory.classList.remove("is-changing");
-      }, 430);
+      }, 520);
     }
 
     async function loadHeadlines(force = false) {

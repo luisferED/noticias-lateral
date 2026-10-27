@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 import logging
 import re
 import threading
@@ -12,7 +13,10 @@ from urllib.error import URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
+import qrcode
+from qrcode.exceptions import DataOverflowError
+from qrcode.image.svg import SvgPathFillImage
 
 from config import BASE_DIR, DATA_DIR, HOST, MAX_ITEMS, PORT, REFRESH_SECONDS, ROTATE_SECONDS
 
@@ -111,7 +115,7 @@ def is_valid_headline(text: str, url: str) -> bool:
         return False
     if "{{" in text or "}}" in text:
         return False
-    if not url.startswith("https://eldeber.com.bo/"):
+    if not is_article_url(url):
         return False
 
     blocked = {
@@ -128,6 +132,28 @@ def is_valid_headline(text: str, url: str) -> bool:
     if text.isupper() and len(text.split()) <= 5:
         return False
     return True
+
+
+def is_article_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        return (len(url) <= 2048 and parsed.scheme == "https" and
+                parsed.netloc in {"eldeber.com.bo", "www.eldeber.com.bo"} and
+                len([part for part in parsed.path.split("/") if part]) >= 2)
+    except ValueError:
+        return False
+
+
+def valid_saved_payload(saved) -> bool:
+    # Older caches may contain text-only stories or a different schema.
+    return (isinstance(saved, dict) and
+            isinstance(saved.get("updated_at"), (int, float)) and
+            isinstance(saved.get("items"), list) and bool(saved["items"]) and
+            all(isinstance(item, dict) and
+                isinstance(item.get("title"), str) and
+                isinstance(item.get("url"), str) and is_article_url(item["url"]) and
+                isinstance(item.get("image"), str) and is_valid_image(item["image"])
+                for item in saved["items"]))
 
 
 def fetch_homepage() -> str:
@@ -197,7 +223,7 @@ def infer_section(url: str) -> str:
 
 
 def get_payload(force: bool = False) -> dict:
-    # One upstream request at a time, shared by all web and NDI consumers.
+    # One upstream request at a time, shared by all browser consumers.
     with _cache_lock:
         return _get_payload_locked(force)
 
@@ -207,7 +233,7 @@ def _get_payload_locked(force: bool = False) -> dict:
     if _cache["payload"] is None:
         try:
             saved = json.loads(_cache_file.read_text(encoding="utf-8"))
-            if isinstance(saved.get("items"), list) and saved["items"]:
+            if valid_saved_payload(saved):
                 saved["items"] = saved["items"][:MAX_ITEMS]
                 _cache["payload"] = saved
         except (OSError, ValueError, AttributeError):
@@ -263,7 +289,9 @@ app = Flask(__name__, static_folder=None)
 def response_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
-    if not request.path.startswith("/assets/"):
+    if request.path == "/api/qr.svg" and response.status_code == 200:
+        response.headers["Cache-Control"] = "public, max-age=86400"
+    elif not request.path.startswith("/assets/"):
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -296,6 +324,28 @@ def public_config():
 def headlines():
     payload = get_payload()
     return jsonify(payload), 200 if payload.get("items") else 503
+
+
+@lru_cache(maxsize=128)
+def qr_svg(url: str) -> bytes:
+    code = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M,
+                         box_size=4, border=4)
+    code.add_data(url)
+    code.make(fit=True)
+    image = code.make_image(image_factory=SvgPathFillImage)
+    image.get_image().set("shape-rendering", "crispEdges")
+    return image.to_string()
+
+
+@app.get("/api/qr.svg")
+def article_qr():
+    url = request.args.get("url", "").strip()
+    if not is_article_url(url):
+        return jsonify(error="Se requiere una URL de noticia de El Deber"), 400
+    try:
+        return Response(qr_svg(url), mimetype="image/svg+xml")
+    except DataOverflowError:
+        return jsonify(error="La URL es demasiado larga para un QR"), 400
 
 
 def main() -> None:

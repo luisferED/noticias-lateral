@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import URLError
+from xml.etree import ElementTree
 
 import server
 
@@ -47,6 +48,33 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(config["max_items"], server.MAX_ITEMS)
         self.assertEqual((config["width"], config["height"]), (1920, 1080))
 
+    def test_qr_is_svg_with_white_background_and_local_generation(self):
+        with patch.object(server, "fetch_homepage") as fetch:
+            response = self.client.get("/api/qr.svg", query_string={"url": ITEM["url"]})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "image/svg+xml")
+        image = ElementTree.fromstring(response.data)
+        self.assertEqual(image.tag, "{http://www.w3.org/2000/svg}svg")
+        self.assertEqual(image.attrib["shape-rendering"], "crispEdges")
+        self.assertIsNotNone(image.find("{http://www.w3.org/2000/svg}path"))
+        self.assertIn(b'fill="white"', response.data)
+        self.assertIn("max-age=86400", response.headers["Cache-Control"])
+        fetch.assert_not_called()
+
+    def test_qr_changes_with_article_url(self):
+        first = self.client.get("/api/qr.svg", query_string={"url": ITEM["url"]})
+        second = self.client.get("/api/qr.svg", query_string={"url": ITEM["url"] + "-otra"})
+        self.assertNotEqual(first.data, second.data)
+
+    def test_qr_rejects_non_article_and_external_urls(self):
+        for url in ("", "https://example.com/pais/nota", "javascript:alert(1)",
+                    "https://eldeber.com.bo/", "https://eldeber.com.bo/pais",
+                    "https://eldeber.com.bo.example.org/pais/nota", "https://[invalid",
+                    "https://eldeber.com.bo/pais/" + "x" * 2048):
+            with self.subTest(url=url[:60]):
+                response = self.client.get("/api/qr.svg", query_string={"url": url})
+                self.assertEqual(response.status_code, 400)
+
     def test_cache_persisted_and_concurrent_requests_deduplicated(self):
         with patch.object(server, "fetch_homepage", return_value="html") as fetch, \
                 patch.object(server, "extract_headlines", return_value=[ITEM]):
@@ -72,6 +100,26 @@ class ServiceTests(unittest.TestCase):
             response = self.client.get("/api/headlines")
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json["items"], [])
+
+    def test_legacy_or_malformed_cache_is_ignored_without_crash(self):
+        for saved in ([ITEM], {"items": [ITEM]},
+                      {"updated_at": 1, "items": [{"title": "Antigua", "url": ITEM["url"]}]},
+                      {"updated_at": 1, "items": [dict(ITEM, url="javascript:alert(1)")]}):
+            with self.subTest(saved=saved):
+                server._cache.update(expires_at=0, payload=None)
+                (self.data / "headlines.json").write_text(json.dumps(saved), encoding="utf-8")
+                with patch.object(server, "fetch_homepage", side_effect=URLError("offline")):
+                    response = self.client.get("/api/headlines")
+                self.assertEqual(response.status_code, 503)
+
+    def test_all_extracted_article_urls_are_accepted_by_qr_endpoint(self):
+        html = (f'<a href="/pais/nota-publica"><img src="{ITEM["image"]}">'
+                f'{ITEM["title"]}</a>')
+        items = server.extract_headlines(html)
+        self.assertEqual(len(items), 1)
+        for item in items:
+            self.assertEqual(self.client.get("/api/qr.svg", query_string={"url": item["url"]}).status_code, 200)
+        self.assertFalse(server.is_article_url("https://eldeber.com.bo/pais//"))
 
     def test_source_parser_deduplicates_and_limits_items(self):
         html = "".join(

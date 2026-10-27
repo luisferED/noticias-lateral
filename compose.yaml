@@ -3,13 +3,12 @@ services:
     build: .
     expose:
       - "8095"
-    # Private API for the NDI service using the host network, never the LAN.
-    ports:
-      - "127.0.0.1:${NDI_WEB_LOOPBACK_PORT:-18095}:8095"
     networks:
       - dokploy-network
-    labels:
-      traefik.docker.network: dokploy-network
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     environment:
       HOST: 0.0.0.0
       PORT: "8095"
@@ -27,65 +26,10 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  ndi:
-    build:
-      context: .
-      dockerfile: Dockerfile.ndi
-    network_mode: host
-    labels:
-      traefik.enable: "false"
-    depends_on:
-      web:
-        condition: service_healthy
-    environment:
-      HEADLINES_API_URL: "${HEADLINES_API_URL:-http://127.0.0.1:18095/api/headlines}"
-      NDI_SOURCE_NAME: "${NDI_SOURCE_NAME:-ED_DEBER_TITULARES_ALPHA}"
-      NDI_FPS: "${NDI_FPS:-30}"
-      NDI_LIBRARY_PATH: "${NDI_LIBRARY_PATH:-/opt/ndi/libndi.so}"
-      NDI_DATA_DIR: /app/ndi-data
-      NDI_STATUS_FILE: /app/ndi-data/status.json
-      NDI_CONFIG_DIR: /opt/ndi-config
-      NDI_STALL_SECONDS: "${NDI_STALL_SECONDS:-30}"
-      NDI_STARTUP_SECONDS: "${NDI_STARTUP_SECONDS:-120}"
-      ROTATE_SECONDS: "${ROTATE_SECONDS:-15}"
-      REFRESH_SECONDS: "${REFRESH_SECONDS:-180}"
-      MAX_ITEMS: "${MAX_ITEMS:-14}"
-    volumes:
-      - ndi-data:/app/ndi-data
-      - type: bind
-        source: "${NDI_RUNTIME_HOST_DIR:-/opt/noticias-lateral/ndi-runtime}"
-        target: /opt/ndi
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
-        source: "${NDI_CONFIG_HOST_DIR:-/opt/noticias-lateral/ndi-config}"
-        target: /opt/ndi-config
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
-        source: /run/dbus/system_bus_socket
-        target: /run/dbus/system_bus_socket
-        read_only: true
-        bind:
-          create_host_path: false
-    restart: unless-stopped
-    init: true
-    stop_grace_period: 15s
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
 volumes:
   headlines-data:
-  ndi-data:
+    external: true
+    name: "${HEADLINES_VOLUME_NAME:?Definir el nombre exacto del volumen existente en Dokploy}"
 
 networks:
   dokploy-network:

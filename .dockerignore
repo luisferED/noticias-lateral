@@ -6,19 +6,3 @@
 !index.html
 !assets/
 !assets/**
-
-# Excluir tambien archivos privados o temporales dentro de assets.
-**/.env
-**/.env.*
-**/*.key
-**/*.pem
-**/*.pfx
-**/*.p12
-**/*.tmp
-**/*.bak
-**/Thumbs.db
-**/.DS_Store
-**/*.dll
-**/*.so
-**/*.so.*
-**/*.dylib

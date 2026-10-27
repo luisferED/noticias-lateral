@@ -11,7 +11,7 @@ async function main() {
     if (!elements.has(id)) elements.set(id, {
       style: { setProperty() {} }, classList: { add() {}, remove() {} },
       removeAttribute() {}, textContent: '', scrollHeight: 100,
-      scrollWidth: 200, clientWidth: 250,
+      scrollWidth: 200, clientWidth: 430, clientHeight: 592,
     });
     return elements.get(id);
   }
@@ -22,7 +22,9 @@ async function main() {
   }));
   const context = vm.createContext({
     console,
+    getComputedStyle: () => ({ paddingTop: '36px', paddingBottom: '24px' }),
     document: { getElementById: element, querySelector: element,
+      documentElement: element('documentElement'),
       fonts: { ready: Promise.resolve() } },
     window: { innerWidth: 1920, innerHeight: 1080, addEventListener() {},
       setTimeout(fn) { fn(); }, setInterval(fn, ms) { timers.set(ms, fn); } },
@@ -34,10 +36,14 @@ async function main() {
   assert(timers.has(15000));
   assert(timers.has(180000));
   const title = element('storyTitle');
+  assert.equal(element('storyLink').href, items[0].url);
+  assert.equal(element('storyQr').src, `/api/qr.svg?url=${encodeURIComponent(items[0].url)}`);
   const seen = new Set([title.textContent]);
   for (let i = 0; i < 12; i++) {
     timers.get(15000)();
     seen.add(title.textContent);
+    assert.equal(element('storyLink').href, items[i + 1].url);
+    assert.equal(element('storyQr').src, `/api/qr.svg?url=${encodeURIComponent(items[i + 1].url)}`);
   }
   assert.equal(title.textContent, 'Noticia 12');
   await timers.get(180000)();
@@ -45,9 +51,11 @@ async function main() {
   timers.get(15000)();
   seen.add(title.textContent);
   assert.equal(title.textContent, 'Noticia 13');
+  assert.equal(element('storyLink').href, items[13].url);
   assert.equal(seen.size, 14, 'all queued stories must appear');
   timers.get(15000)();
   assert.equal(title.textContent, 'Noticia 0');
+  assert.equal(element('storyLink').href, items[0].url);
   console.log('OK: 15s rotation, 180s refresh, full queue without reset');
 }
 
